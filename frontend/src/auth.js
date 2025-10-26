@@ -5,7 +5,7 @@ const clientId = import.meta.env.VITE_MSAL_CLIENT_ID || '<YOUR_CLIENT_ID>';
 const authority = import.meta.env.VITE_MSAL_AUTHORITY || 'https://login.microsoftonline.com/common';
 const scopesEnv = import.meta.env.VITE_MSAL_SCOPES || '';
 const defaultScopes = scopesEnv ? scopesEnv.split(',').map(s => s.trim()) : ['openid', 'profile'];
-const redirectUri = import.meta.env.VITE_MSAL_REDIRECT_URI || window.location.origin;
+const redirectUri = import.meta.env.VITE_MSAL_REDIRECT_URI || (window.location.origin + '/auth-callback');
 
 const msalConfig = {
   auth: {
@@ -110,7 +110,14 @@ function scheduleRefreshForAccount(account, accessToken, onRefresh, onError) {
         const key = account.homeAccountId || account.localAccountId || account.username
         refreshTimers.set(key, t)
       } else {
-        if (onError) onError(e)
+        // final failure: clear any scheduled timer and propagate a descriptive error object
+        const key = account.homeAccountId || account.localAccountId || account.username
+        const finalErr = { type: 'refresh_failed', error: e, attempts: attempt }
+        if (refreshTimers.has(key)) {
+          clearTimeout(refreshTimers.get(key))
+          refreshTimers.delete(key)
+        }
+        if (onError) onError(finalErr)
       }
     }
   }
@@ -135,6 +142,13 @@ function stopAllRefresh() {
   refreshTimers.clear();
 }
 
+// Initiate a redirect login flow, optionally hinting the username to streamline re-auth
+function requestReLogin(account, scopes = defaultScopes) {
+  const loginRequest = { scopes };
+  if (account && account.username) loginRequest.loginHint = account.username;
+  return pca.loginRedirect(loginRequest);
+}
+
 export {
   pca,
   loginRedirect,
@@ -144,6 +158,8 @@ export {
   acquireTokenForAccount,
   scheduleRefreshForAccount,
   stopRefreshForAccount,
+  stopAllRefresh,
+  requestReLogin,
   stopAllRefresh,
   defaultScopes,
 };

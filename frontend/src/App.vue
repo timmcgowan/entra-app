@@ -25,6 +25,10 @@
 
     <div style="margin-top:1rem; background:#fff6f6; padding:10px; color:#900" v-if="error">
       <strong>Error:</strong> {{ error }}
+      <div style="margin-top:0.5rem">
+        <button @click="reauth">Re-authenticate</button>
+        <button style="margin-left:8px" @click="clearError">Dismiss</button>
+      </div>
     </div>
 
     <pre style="margin-top:1rem; background:#f6f6f6; padding:10px">{{ output }}</pre>
@@ -36,7 +40,8 @@
 import { ref, onMounted, computed } from 'vue'
 import axios from 'axios'
 import { useAuthStore } from './store'
-import { loginRedirect, logoutRedirect, defaultScopes, processRedirect, getAccounts, acquireTokenForAccount, scheduleRefreshForAccount } from './auth'
+import { useUserStore } from './userStore'
+import { loginRedirect, logoutRedirect, defaultScopes, processRedirect, getAccounts, acquireTokenForAccount, scheduleRefreshForAccount, requestReLogin, stopRefreshForAccount } from './auth'
 
 const store = useAuthStore()
 const output = ref('')
@@ -93,6 +98,8 @@ onMounted(async () => {
           // set expiry (if available)
           const payload = resp.accessToken ? JSON.parse(atob(resp.accessToken.split('.')[1])) : null
           if (payload && payload.exp) store.setTokenExpiresAt(payload.exp * 1000)
+          // load profile via backend OBO
+          try { const userStore = useUserStore(); userStore.loadProfile(resp.accessToken).catch(()=>{}); } catch(e) {}
           // schedule refresh
           scheduleRefreshForAccount(redirectResult.account, resp.accessToken, (r) => {
             if (r && r.accessToken) {
@@ -119,6 +126,8 @@ onMounted(async () => {
             store.setToken(resp.accessToken)
             const p = resp.accessToken ? JSON.parse(atob(resp.accessToken.split('.')[1])) : null
             if (p && p.exp) store.setTokenExpiresAt(p.exp * 1000)
+              // load profile via backend OBO
+              try { const userStore = useUserStore(); userStore.loadProfile(resp.accessToken).catch(()=>{}); } catch(e) {}
             scheduleRefreshForAccount(a, resp.accessToken, (r) => {
               if (r && r.accessToken) {
                 store.setToken(r.accessToken)
@@ -151,6 +160,8 @@ async function onSelectAccount() {
       store.setToken(resp.accessToken)
       const p = resp.accessToken ? JSON.parse(atob(resp.accessToken.split('.')[1])) : null
       if (p && p.exp) store.setTokenExpiresAt(p.exp * 1000)
+        // load profile via backend OBO
+        try { const userStore = useUserStore(); userStore.loadProfile(resp.accessToken).catch(()=>{}); } catch(e) {}
       scheduleRefreshForAccount(acc, resp.accessToken, (r) => {
         if (r && r.accessToken) {
           store.setToken(r.accessToken)
@@ -163,6 +174,23 @@ async function onSelectAccount() {
   } catch (e) {
     store.setError('acquire token for selected account failed: ' + (e.message || e))
   }
+}
+
+function reauth() {
+  // prefer the selected account, then active account, then first account
+  const acc = store.accounts.find(a => (a.homeAccountId || a.localAccountId || a.username) === selectedAccountId.value) || store.account || (store.accounts && store.accounts[0])
+  try {
+    // stop refresh timers for this account to avoid concurrent retries
+    if (acc) stopRefreshForAccount(acc)
+  } catch (e) {
+    // ignore
+  }
+  // initiate redirect login with hint
+  requestReLogin(acc, defaultScopes).catch(err => store.setError(err.message || String(err)))
+}
+
+function clearError() {
+  store.setError(null)
 }
 
 async function callPublic() {
@@ -180,8 +208,13 @@ async function callProtected() {
     if (!token) {
       // try to silently acquire
       try {
-        token = await acquireToken(defaultScopes)
-        store.setToken(token)
+        if (store.account) {
+          const resp = await acquireTokenForAccount(store.account)
+          if (resp && resp.accessToken) {
+            token = resp.accessToken
+            store.setToken(token)
+          }
+        }
       } catch (e) {
         output.value = 'unable to acquire token: ' + (e.message || e)
         return
