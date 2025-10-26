@@ -1,0 +1,26 @@
+version: '3.8'
+services:
+  opa:
+    image: openpolicyagent/opa:latest
+    command: ["run", "--server", "--addr=0.0.0.0:8181", "/policy/policy.rego", "/policy/data.json"]
+    volumes:
+      - ./opa:/policy
+    ports:
+      - "8181:8181"
+
+  backend:
+    build: ./backend
+    environment:
+      - OPA_URL=http://opa:8181/v1/data/authz/allow
+      - ALLOW_ALL=false
+    ports:
+      - "3000:3000"
+    depends_on:
+      - opa
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5000:5000"
+    depends_on:
+      - backend

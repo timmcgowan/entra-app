@@ -1,0 +1,9 @@
+{
+  "resources": {
+    "/api/resource": {
+      "owner": "alice",
+      "classification": "internal",
+      "tags": ["example"]
+    }
+  }
+}
